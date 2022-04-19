@@ -52,12 +52,12 @@ In this project, developments are divided into three phases incrementally. The u
 
 ### Technology Stack
 
-   Programming Language: Java, Python
-   Framework: Vert.x, Spring Boot
-   ETL: Spark
-   Database: MySQL (InnoDB, MyISAM), Aurora
-   Orchestration: Docker, Kubernetes, kOps
-   Cloud: AWS (EC2, RDS, EKS), Azure (HDInsight)
+**Programming Language**: Java, Python
+**Framework**: Vert.x, Spring Boot
+**ETL**: Spark
+**Database**: MySQL (InnoDB, MyISAM), Aurora
+**Orchestration**: Docker, Kubernetes, kOps
+**Cloud**: AWS (EC2, RDS, EKS), Azure (HDInsight)
 
 ---
 
