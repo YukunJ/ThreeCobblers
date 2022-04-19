@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: micro-service-3-vertx-deployment
+spec:
+  selector:
+    matchLabels:
+      micro-service-3-vertx:  v1
+  replicas: 18
+  template:
+    metadata:
+      labels:
+        micro-service-3-vertx:  v1
+    spec:
+      containers:
+        - name: micro-service-3-vertx-container
+          image: 971734603674.dkr.ecr.us-east-1.amazonaws.com/phase3/micro3:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MYSQL_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-3-vertx-config
+                  key: MYSQL_HOST
+            - name: MYSQL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-3-vertx-config
+                  key: MYSQL_NAME
+            - name: MYSQL_PWD
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-3-vertx-config
+                  key: MYSQL_PWD
+            - name: POOL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-3-vertx-config
+                  key: POOL_SIZE

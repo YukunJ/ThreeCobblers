@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: micro-service-2-vertx-deployment
+spec:
+  selector:
+    matchLabels:
+      micro-service-2-vertx:  v1
+  replicas: 27
+  template:
+    metadata:
+      labels:
+        micro-service-2-vertx:  v1
+    spec:
+      containers:
+        - name: micro-service-2-vertx-container
+          image: 971734603674.dkr.ecr.us-east-1.amazonaws.com/phase3/micro2:latest
+          ports:
+            - containerPort: 8080
+

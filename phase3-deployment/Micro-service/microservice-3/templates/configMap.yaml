@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: micro-service-3-vertx-config
+data:
+  MYSQL_HOST: 'terraform-20220414234045410600000001.cblyi7lvucvp.us-east-1.rds.amazonaws.com'
+  MYSQL_NAME: 'clouduser'
+  MYSQL_PWD : 'CCCobblers'
+  POOL_SIZE : '2'         

@@ -1,0 +1,40 @@
+%livy2.pyspark
+"""
+User Information Table 
+"""
+
+import locale
+locale.setlocale(locale.LC_ALL,'en_US.UTF-8'); # set the encoding for Lower() functionality
+from pyspark.sql.functions import from_json, col, size, explode, lower, desc, when, log, to_date, to_timestamp, countDistinct
+from pyspark.sql import Window
+
+# load in the raw Twitter data
+rawDf = spark.read.json("microservice3_ref.txt")
+
+# take out the sender's user information
+userDf = rawDf\
+    .withColumn("tweet_id", col("id"))\
+    .withColumn("ts", to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss Z yyyy"))\
+    .withColumn("user_id", col("user.id"))\
+    .withColumn("latest_screen_name", col("user.screen_name"))\
+    .withColumn("latest_description", col("user.description"))\
+    .select("tweet_id", "ts", "user_id", "latest_screen_name", "latest_description")
+
+# take out the optionally retweet information
+retweetUserDf = rawDf.filter(~isnull(col("retweeted_status")))\
+                    .withColumn("tweet_id", col("retweeted_status.id"))\
+                    .withColumn("ts", to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss Z yyyy"))\
+                    .withColumn("user_id", col("retweeted_status.user.id"))\
+                    .withColumn("latest_screen_name", col("retweeted_status.user.screen_name"))\
+                    .withColumn("latest_description", col("retweeted_status.user.description"))\
+                    .select("tweet_id", "ts", "user_id", "latest_screen_name", "latest_description")
+
+# union the two dataframe
+total_user = userDf.unionByName(retweetUserDf)
+
+# partition by user_id and take the latest information based on descending timestamp, and then tweet_id for breaking tie
+w = Window.partitionBy("user_id").orderBy(col("ts").desc(), col("tweet_id").desc())
+user_info = total_user\
+                .withColumn('group_rowrank', row_number().over(w))\
+                .filter(col("group_rowrank") == 1)\
+                .drop("group_rowrank", "tweet_id", "ts")

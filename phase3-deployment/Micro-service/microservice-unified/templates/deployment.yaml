@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: micro-service-unified-vertx-deployment
+spec:
+  selector:
+    matchLabels:
+      micro-service-unified-vertx:  v1
+  replicas: 20
+  template:
+    metadata:
+      labels:
+        micro-service-unified-vertx:  v1
+    spec:
+      containers:
+        - name: micro-service-unified-vertx-container
+          image: 971734603674.dkr.ecr.us-east-1.amazonaws.com/phase3/unified:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MYSQL_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-unified-vertx-config
+                  key: MYSQL_HOST
+            - name: MYSQL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-unified-vertx-config
+                  key: MYSQL_NAME
+            - name: MYSQL_PWD
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-unified-vertx-config
+                  key: MYSQL_PWD
+            - name: POOL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: micro-service-unified-vertx-config
+                  key: POOL_SIZE

@@ -1,0 +1,51 @@
+%livy2.pyspark
+import locale
+from pyspark.sql.functions import from_json, col, size, explode, lower, desc, when, log
+locale.setlocale(locale.LC_ALL,'en_US.UTF-8'); # set the encoding for Lower() functionality
+
+# load in the raw Twitter data
+rawDf = spark.read.json("microservice3_ref.txt")
+
+# load in the blacklist of popular hashtag
+rawPopular = sc.textFile("popular_hashtags.txt")
+popular_tags = rawPopular.collect()
+
+# extract out the nested hashtag field from the entity field
+df_hashtags_out = rawDf.withColumn("hashtags", col("entities.hashtags"))
+
+# explode out the hashtag list into individual hashtag
+df_hashtags_explode = df_hashtags_out.withColumn("explode_tag", explode("hashtags"))
+
+# transform all tags to lower cases
+df_hashtags_text = df_hashtags_explode.withColumn("tag_text", lower(col("explode_tag.text")))
+
+# rename to user_id
+df_hash_tags_text_tags = df_hashtags_text\
+            .withColumn("user_id", col("user.id"))
+            
+# select only relevant fields
+df_tags = df_hash_tags_text_tags.select(col("user_id"), col("tag_text"))
+
+# filter out blacklist popular tags
+df_tags_filtered = df_tags.filter(~col("tag_text").isin(popular_tags))
+
+# each user's tag aggregate its count
+df_tags_aggregate = df_tags.groupby("user_id", "tag_text").count()
+
+# self-join to make userA-userB-totalCount
+df_tag_crossjoin = df_tags_aggregate.join(\
+                                df_tags_aggregate\
+                                .withColumnRenamed("user_id", "user2_id")\
+                                .withColumnRenamed("count", "count2"), on = "tag_text")\
+                            .withColumn("count_sum", col("count") + col("count2"))
+                            
+# make the per user pair hashtag raw count sum                      
+df_score2_raw =  df_tag_crossjoin.select(col("user_id"), col("user2_id"), col("count_sum")).groupby("user_id", "user2_id").sum("count_sum")\
+                    .withColumnRenamed("user2_id", "contact_user_id")\
+                    .withColumnRenamed("sum(count_sum)", "countSumRaw")
+
+# filter out the self-hashtag case, leave it default to 1 so that later hashtag score would be 1                   
+df_score2 =  df_score2_raw.filter((col("countSumRaw") > 10) & (col("user_id") != col("contact_user_id"))).withColumn("hashtag_score", 1 + log(1 + col("countSumRaw") - 10))
+
+# calculate the hashtag score
+df_hashtag_score = df_score2.select(col("user_id"), col("contact_user_id"), col("hashtag_score"))

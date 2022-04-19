@@ -1,0 +1,11 @@
+1. Manually deploy 6 EBS volumes with 120 Gigabytes using correct snapshot.
+
+2. Modify the volumeID of pv0/1/2/3/4/5.yaml using ID of EBS volumes created in step 1.
+
+3. kubectl create -f pv0/1/2/3/4/5.yaml.
+
+4. kubectl create -f pvc0/1/2/3/4/5.yaml.
+
+5. kubectl create -f statefulset.yaml. After this step, we should have 6 MySQL pods.
+
+6. helm install micro vertx-micro-3-helm/micro3-vertx. 

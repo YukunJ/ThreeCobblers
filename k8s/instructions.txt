@@ -1,0 +1,54 @@
+To create a kubernetes cluster on AWS, you need to do the following:
+(mostly from the primier + personal debugging experience)
+
+0. Make sure you have aws command line, helm, kops installed already
+(Assume you already have the first 2, 
+to install kops on Mac, do 'brew update && brew install kops' if you have brew
+otherwise, check 'https://kops.sigs.k8s.io/getting_started/install/' to pick an option
+
+1. If working locally, check your aws user by 'aws configure' 
+   and set to the user you want to use by access key and secret key
+
+2. Important! Go to aws console, search "I AM", click, pick out that user
+   In permissions section, add permission, create a new group with full access (first one)
+   and add this user into that group. Otherwise you won't be able to create bucket in Terraform
+
+3. cd to the bucket folder, 'terraform init && terraform apply'. The bucker name should be printed out on the screen.
+
+4. export the bucket name by 'export KOPS_STATE_STORE=s3://[bucket-name]', fill the bracket []
+
+5. cd to the cluster folder
+
+6. run 'kops create -f cluster.yaml,ig-master.yaml,ig-nodes.yaml'
+   change the image weblink and machine type in the .yaml file there
+
+7. add the ssh key file name by do 'kops edit cluster cluster.k8s.local'
+   you will enter a vim mode, go to the line where says
+
+  spec:
+    sshKeyName: key_pair_name
+    additionalPolicies: ...
+    ....very very long stuff down below....
+
+   For example. my key file is called freetier.pem, 
+   then I will replace 'key_pair_name' by 'freetier', no '.pem' needed
+
+8. then ':wq' exit the vim, do 
+'kops update cluster --name cluster.k8s.local --yes --admin=2400h'
+
+9. wait for around 10 minutes by do 'kops validate cluster --wait 10m'
+   it's really slow, I succeed at around 9 minutes. 
+   You will find at first it's all saying "no such host ...", just wait patiently
+
+10. add the ELB controller, which can control the ingress by doing
+   'helm repo add eks https://aws.github.io/eks-charts'
+   'helm repo update'
+   'helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --set clusterName=cluster.k8s.local'
+
+11. install ingress backend controller by running 'helm install my-nginx stable/nginx-ingress'
+
+12. cd to Ingress Folder, do 'kubectl create -f ingress.yaml' and check by 'kubectl get ingress' to see if the ingress deployment is successful or nor
+
+13. Finally do 'helm install [applicationName] [folder]'
+
+You are ready to go!

@@ -1,0 +1,15 @@
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: pv2
+spec:
+  capacity:
+    storage: 120Gi
+  claimRef:
+    namespace: default
+    name: data-mysql-2
+  accessModes:
+    - ReadWriteOnce
+  awsElasticBlockStore:
+    volumeID: vol-08668a05192ac8b05
+    fsType: ext4

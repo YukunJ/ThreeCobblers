@@ -1,0 +1,392 @@
+%livy2.pyspark
+import locale
+locale.setlocale(locale.LC_ALL,'en_US.UTF-8'); # set the encoding for UTF-8 functionality
+from pyspark.sql.functions import from_json, col, size, explode, lower, desc, when, isnull, log, to_date, to_timestamp, countDistinct, row_number, collect_list, concat_ws, udf
+from pyspark.sql import Window
+df_Raw = spark.read.json("microservice3_ref.txt").cache()
+
+%livy2.pyspark
+#========================================================Interaction Score========================================================================#
+#read the dataset
+df_ref = df_Raw
+columns = df_ref.columns
+
+#find the contact tweet
+df_contact = df_ref.filter(~(isnull(df_ref.in_reply_to_user_id) & isnull(df_ref.retweeted_status)))
+
+#extract user id from user
+df_contact = df_contact.withColumn("user_id", df_contact.user["id"])
+
+#extract retweeted_user from retweeted_status
+df_contact = df_contact.withColumn('retweeted_user', when(isnull(df_contact.retweeted_status), None).otherwise(df_contact.retweeted_status["user"]))
+
+#extract retweeted_user_id from retweeted_user
+df_contact = df_contact.withColumn('retweeted_user_id', when(isnull(df_contact.retweeted_user), None).otherwise(df_contact.retweeted_user["id"]))
+
+#only keep id fields
+df_contact = df_contact[["user_id", "in_reply_to_user_id", "retweeted_user_id"]]
+
+#find the reply tweet, duplicate them, since they contribute 2 points to the score
+df_reply = df_contact.filter(~isnull(df_contact.in_reply_to_user_id))
+df_contact_more_reply = df_contact.unionByName(df_reply)
+
+#combine in_reply_to_user_id with retweeted_user_id to form contact_user_id
+df_contact_more_reply = df_contact_more_reply.withColumn('contact_user_id', when(isnull(df_contact_more_reply.retweeted_user_id), df_contact_more_reply.in_reply_to_user_id).otherwise(df_contact_more_reply.retweeted_user_id))[["user_id", "contact_user_id"]]
+
+#find contact tweet involving only one user
+df_contact_more_reply_self = df_contact_more_reply.filter(df_contact_more_reply.user_id == df_contact_more_reply.contact_user_id)
+
+#find contact tweet involving two users
+df_contact_more_reply_other = df_contact_more_reply.filter(~(df_contact_more_reply.user_id == df_contact_more_reply.contact_user_id))
+
+#for row A, B, make a row B, A, since we want to store score between A and B two times to speed up query, no need to do this for contact tweet involving only one user
+df_contact_more_reply_other_all = df_contact_more_reply_other.unionByName(df_contact_more_reply_other.rdd.toDF(["contact_user_id", "user_id"]))
+
+#glue contact user together
+df_contact_all = df_contact_more_reply_other_all.unionByName(df_contact_more_reply_self)
+
+#find the count
+df_interaction = df_contact_all.groupby("user_id", "contact_user_id").count()
+
+#compute the score
+df_interaction_score = df_interaction.withColumn("interaction_score", log(1 + df_interaction["count"])).drop("count").cache()
+
+%livy2.pyspark
+#========================================================Hashtags Score========================================================================#
+# load in the raw Twitter data
+rawDf = df_Raw
+
+# load in the blacklist of popular hashtag
+rawPopular = sc.textFile("popular_hashtags.txt")
+popular_tags = rawPopular.collect()
+
+# extract out the nested hashtag field from the entity field
+df_hashtags_out = rawDf.withColumn("hashtags", col("entities.hashtags"))
+
+# explode out the hashtag list into individual hashtag
+df_hashtags_explode = df_hashtags_out.withColumn("explode_tag", explode("hashtags"))
+
+# transform all tags to lower cases
+df_hashtags_text = df_hashtags_explode.withColumn("tag_text", lower(col("explode_tag.text")))
+
+# rename to user_id
+df_hash_tags_text_tags = df_hashtags_text\
+            .withColumn("user_id", col("user.id"))
+            
+# select only relevant fields
+df_tags = df_hash_tags_text_tags.select(col("user_id"), col("tag_text"))
+
+# filter out blacklist popular tags
+df_tags_filtered = df_tags.filter(~col("tag_text").isin(popular_tags))
+
+# each user's tag aggregate its count
+df_tags_aggregate = df_tags.groupby("user_id", "tag_text").count()
+
+# self-join to make userA-userB-totalCount
+df_tag_crossjoin = df_tags_aggregate.join(\
+                                df_tags_aggregate\
+                                .withColumnRenamed("user_id", "user2_id")\
+                                .withColumnRenamed("count", "count2"), on = "tag_text")\
+                            .withColumn("count_sum", col("count") + col("count2"))
+                            
+# make the per user pair hashtag raw count sum                      
+df_score2_raw =  df_tag_crossjoin.select(col("user_id"), col("user2_id"), col("count_sum")).groupby("user_id", "user2_id").sum("count_sum")\
+                    .withColumnRenamed("user2_id", "contact_user_id")\
+                    .withColumnRenamed("sum(count_sum)", "countSumRaw")
+
+# filter out the self-hashtag case, leave it default to 1 so that later hashtag score would be 1                   
+df_score2 =  df_score2_raw.filter((col("countSumRaw") > 10) & (col("user_id") != col("contact_user_id")))\
+                .withColumn("hashtag_score", 1 + log(1 + col("countSumRaw") - 10))\
+                .withColumn("user_id_hash", col("user_id"))\
+                .withColumn("contact_user_id_hash", col("contact_user_id"))
+
+# calculate the hashtag score
+df_hashtag_score = df_score2.select(col("user_id_hash"), col("contact_user_id_hash"), col("hashtag_score")).cache()
+
+%livy2.pyspark
+#========================================================Join Interaction&Hashtag Score========================================================================#
+df_product_join = df_interaction_score.join(df_hashtag_score,\
+                        (df_interaction_score.user_id == df_hashtag_score.user_id_hash) & (df_interaction_score.contact_user_id == df_hashtag_score.contact_user_id_hash),\
+                        how = "left")
+df_product_score = df_product_join\
+                    .withColumn("product_score", \
+                        when(isnull(df_product_join.hashtag_score), df_product_join.interaction_score)\
+                            .otherwise(df_product_join.hashtag_score * df_product_join.interaction_score))\
+                    .select("user_id", "contact_user_id", "product_score")
+
+%livy2.pyspark
+#========================================================Latest Contact Tweet Between Users========================================================================#
+#read the dataset
+df_ref = df_Raw
+
+#find the contact tweet
+df_contact = df_ref.filter(~(isnull(df_ref.in_reply_to_user_id) & isnull(df_ref.retweeted_status)))
+
+#extract user id from user
+df_contact = df_contact.withColumn("user_id", df_contact.user["id"])
+
+#extract retweeted_user from retweeted_status
+df_contact = df_contact.withColumn('retweeted_user', when(isnull(df_contact.retweeted_status), None).otherwise(df_contact.retweeted_status["user"]))
+
+#extract retweeted_user_id from retweeted_user
+df_contact = df_contact.withColumn('retweeted_user_id', when(isnull(df_contact.retweeted_user), None).otherwise(df_contact.retweeted_user["id"]))
+
+#only keep id fields
+df_contact = df_contact[["user_id", "in_reply_to_user_id", "retweeted_user_id"]]
+
+#find the reply tweet, duplicate them, since they contribute 2 points to the score
+df_reply = df_contact.filter(~isnull(df_contact.in_reply_to_user_id))
+df_contact_more_reply = df_contact.unionByName(df_reply)
+
+#combine in_reply_to_user_id with retweeted_user_id to form contact_user_id
+df_contact_more_reply = df_contact_more_reply.withColumn('contact_user_id', when(isnull(df_contact_more_reply.retweeted_user_id), df_contact_more_reply.in_reply_to_user_id).otherwise(df_contact_more_reply.retweeted_user_id))[["user_id", "contact_user_id"]]
+
+#find contact tweet involving only one user
+df_contact_more_reply_self = df_contact_more_reply.filter(df_contact_more_reply.user_id == df_contact_more_reply.contact_user_id)
+
+#find contact tweet involving two users
+df_contact_more_reply_other = df_contact_more_reply.filter(~(df_contact_more_reply.user_id == df_contact_more_reply.contact_user_id))
+
+#for row A, B, make a row B, A, since we want to store score between A and B two times to speed up query, no need to do this for contact tweet involving only one user
+df_contact_more_reply_other_all = df_contact_more_reply_other.unionByName(df_contact_more_reply_other.rdd.toDF(["contact_user_id", "user_id"]))
+
+#glue contact user together
+df_contact_all = df_contact_more_reply_other_all.unionByName(df_contact_more_reply_self)
+
+#find the count
+df_interaction = df_contact_all.groupby("user_id", "contact_user_id").count()
+
+#compute the score
+df_interaction_score = df_interaction.withColumn("interaction_score", log(1 + df_interaction["count"]))
+
+
+df_ref_clean = df_ref.withColumn("user_id", df_ref.user["id"]).withColumn("tweet_id", col("id")) \
+               .withColumn("ts", to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss Z yyyy"))
+               
+#extract retweeted_user from retweeted_status
+df_ref_clean = df_ref_clean.withColumn('retweeted_user', when(isnull(df_ref_clean.retweeted_status), None).otherwise(df_ref_clean.retweeted_status["user"]))
+
+#extract retweeted_user_id from retweeted_user
+df_ref_clean = df_ref_clean.withColumn('retweeted_user_id', when(isnull(df_ref_clean.retweeted_user), None).otherwise(df_ref_clean.retweeted_user["id"]))[["user_id", "in_reply_to_user_id", "retweeted_user_id", "text", "ts", "tweet_id"]].cache()
+
+df_reply = df_ref_clean.filter(~isnull(df_ref_clean.in_reply_to_user_id))
+df_reply = df_reply.withColumn('contact_user_id', df_reply['in_reply_to_user_id'])[['user_id','contact_user_id', 'text', 'ts', 'tweet_id']]
+
+
+#find contact tweet involving only one user
+df_reply_self = df_reply.filter(df_reply.user_id == df_reply.contact_user_id)
+
+#find contact tweet involving two users
+df_reply_other = df_reply.filter(~(df_reply.user_id == df_reply.contact_user_id))
+
+#for row A, B, make a row B, A, since we want to store score between A and B two times to speed up query, no need to do this for contact tweet involving only one user
+df_reply_all = df_reply_other.unionByName(df_reply_other.rdd.toDF(['contact_user_id', 'user_id', 'text', 'ts', 'tweet_id']))
+
+#glue contact user together
+df_reply_all = df_reply_all.unionByName(df_reply_self)
+
+w = Window.partitionBy("user_id", "contact_user_id").orderBy(col("ts").desc(), col("tweet_id").desc())
+df_reply_latest = df_reply_all.withColumn('group_rowrank', row_number().over(w))\
+                .filter(col("group_rowrank") == 1)\
+                .drop("group_rowrank")
+    
+df_reply_latest = df_reply_latest.withColumn("ts_reply", df_reply_latest["ts"]) \
+                                .withColumn("id_reply", df_reply_latest["tweet_id"]) \
+                                .withColumn("latest_reply", df_reply_latest.text) \
+                                .withColumn("user_id_reply", df_reply_latest.user_id) \
+                                .withColumn("contact_user_id_reply", df_reply_latest.contact_user_id) \
+                                .drop("ts", "tweet_id", "user_id", "contact_user_id", "text")
+
+
+df_retweet = df_ref_clean.filter(~isnull(df_ref_clean['retweeted_user_id']))
+df_retweet = df_retweet.withColumn('contact_user_id', df_retweet['retweeted_user_id'])[['user_id','contact_user_id', 'text', 'ts', 'tweet_id']]
+
+
+#find contact tweet involving only one user
+df_retweet_self = df_retweet.filter(df_retweet.user_id == df_retweet.contact_user_id)
+
+#find contact tweet involving two users
+df_retweet_other = df_retweet.filter(~(df_retweet.user_id == df_retweet.contact_user_id))
+
+#for row A, B, make a row B, A, since we want to store score between A and B two times to speed up query, no need to do this for contact tweet involving only one user
+df_retweet_all = df_retweet_other.unionByName(df_retweet_other.rdd.toDF(['contact_user_id', 'user_id', 'text', 'ts', 'tweet_id']))
+
+#glue contact user together
+df_retweet_all = df_retweet_all.unionByName(df_retweet_self)
+
+w = Window.partitionBy("user_id", "contact_user_id").orderBy(col("ts").desc(), col("tweet_id").desc())
+df_retweet_latest = df_retweet_all.withColumn('group_rowrank', row_number().over(w))\
+                .filter(col("group_rowrank") == 1)\
+                .drop("group_rowrank")
+                
+df_retweet_latest = df_retweet_latest.withColumn("ts_retweet", df_retweet_latest["ts"]) \
+                                .withColumn("id_retweet", df_retweet_latest["tweet_id"]) \
+                                .withColumn("latest_retweet", df_retweet_latest.text) \
+                                .withColumn("user_id_retweet", df_retweet_latest.user_id) \
+                                .withColumn("contact_user_id_retweet", df_retweet_latest.contact_user_id) \
+                                .drop("ts", "tweet_id", "user_id", "contact_user_id", "text")
+                                
+df_joined = df_interaction_score.drop("count") \
+                                .join(df_reply_latest, (df_interaction_score.user_id == df_reply_latest.user_id_reply) & (df_interaction_score.contact_user_id == df_reply_latest.contact_user_id_reply), how='left')
+                                
+df_joined = df_joined.join(df_retweet_latest, (df_joined.user_id == df_retweet_latest.user_id_retweet) & (df_joined.contact_user_id == df_retweet_latest.contact_user_id_retweet), how='left') \
+                                .drop("user_id_reply", "contact_user_id_reply", "user_id_retweet","contact_user_id_retweet")
+
+df_latest_tweet = df_joined.withColumn("both_latest",  \
+                when(isnull(df_joined.ts_retweet), df_joined["latest_reply"]) \
+                    .otherwise(when(isnull(df_joined.ts_reply), df_joined["latest_retweet"]) \
+                        .otherwise(when(df_joined.ts_reply > df_joined.ts_retweet, df_joined["latest_reply"]) \
+                            .otherwise(when(df_joined.ts_reply < df_joined.ts_retweet, df_joined["latest_retweet"]) \
+                                .otherwise(when(df_joined.id_reply < df_joined.id_retweet, df_joined["latest_retweet"]) \
+                                    .otherwise(df_joined["latest_reply"]) \
+                                ) \
+                            ) \
+                        ) \
+                    ) \
+                )\
+                .withColumnRenamed("user_id", "user_id_tweet")\
+                .withColumnRenamed("contact_user_id", "contact_user_id_tweet")\
+                .drop("interaction_score", "ts_reply", "id_reply", "ts_retweet", "id_retweet")
+
+
+%livy2.pyspark
+#========================================================Final Combine Static Score Table========================================================================#
+static_table = df_product_score.join(df_latest_tweet,\
+                                    (df_product_score.user_id == df_latest_tweet.user_id_tweet) & (df_product_score.contact_user_id == df_latest_tweet.contact_user_id_tweet),\
+                                    how = "left")\
+                                .drop("user_id_tweet", "contact_user_id_tweet")
+static_table = static_table.fillna(value = "", subset = ["latest_retweet", "latest_reply"])
+
+%livy2.pyspark
+#========================================================Export to CSV File========================================================================#
+import csv
+from StringIO import StringIO
+def csv_string_for_row(row):
+    sio = StringIO()
+    csv.writer(sio, quoting=csv.QUOTE_ALL).writerow([unicode(elem).encode('utf-8') for elem in row])
+    value = sio.getvalue()
+    sio.close()
+    return value
+static_table.rdd.map(csv_string_for_row).saveAsTextFile('static_table.csv')
+
+
+%livy2.pyspark
+#========================================================User Table========================================================================#
+import locale
+locale.setlocale(locale.LC_ALL,'en_US.UTF-8'); # set the encoding for Lower() functionality
+from pyspark.sql.functions import from_json, col, size, explode, lower, desc, when, log, to_date, to_timestamp, countDistinct, row_number
+from pyspark.sql import Window
+
+rawDf = df_Raw
+
+# take out the sender's user information
+userDf = rawDf\
+    .withColumn("tweet_id", col("id"))\
+    .withColumn("ts", to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss Z yyyy"))\
+    .withColumn("user_id", col("user.id"))\
+    .withColumn("latest_screen_name", col("user.screen_name"))\
+    .withColumn("latest_description", col("user.description"))\
+    .select("tweet_id", "ts", "user_id", "latest_screen_name", "latest_description")
+
+# take out the optionally retweet information
+retweetUserDf = rawDf.filter(~isnull(col("retweeted_status")))\
+                    .withColumn("tweet_id", col("retweeted_status.id"))\
+                    .withColumn("ts", to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss Z yyyy"))\
+                    .withColumn("user_id", col("retweeted_status.user.id"))\
+                    .withColumn("latest_screen_name", col("retweeted_status.user.screen_name"))\
+                    .withColumn("latest_description", col("retweeted_status.user.description"))\
+                    .select("tweet_id", "ts", "user_id", "latest_screen_name", "latest_description")
+
+# replace NULL description by empty string
+userDf = userDf.fillna(value = "", subset = ["latest_description"])
+retweetUserDf = retweetUserDf.fillna(value = "", subset = ["latest_description"])
+
+# union the two dataframe
+total_user = userDf.unionByName(retweetUserDf)
+
+# partition by user_id and take the latest information based on descending timestamp, and then tweet_id for breaking tie
+w = Window.partitionBy("user_id").orderBy(col("ts").desc(), col("tweet_id").desc())
+user_info = total_user\
+                .withColumn('group_rowrank', row_number().over(w))\
+                .filter(col("group_rowrank") == 1)\
+                .drop("group_rowrank", "tweet_id", "ts")
+
+%livy2.pyspark
+#========================================================Export to CSV File========================================================================#
+import csv
+from StringIO import StringIO
+def csv_string_for_row(row):
+    sio = StringIO()
+    csv.writer(sio, quoting=csv.QUOTE_ALL).writerow([unicode(elem).encode('utf-8') for elem in row])
+    value = sio.getvalue()
+    sio.close()
+    return value
+user_info.rdd.map(csv_string_for_row).saveAsTextFile('user_info.csv')
+
+%livy2.pyspark
+#========================================================Dynamic Table========================================================================#
+df_ref = df_Raw
+columns = df_ref.columns
+
+#find the contact tweet
+df_contact = df_ref.filter(~(isnull(df_ref.in_reply_to_user_id) & isnull(df_ref.retweeted_status)))
+
+#extract user id from user
+df_contact = df_contact.withColumn("user_id", df_contact.user["id"])
+
+#extract retweeted_user from retweeted_status
+df_contact = df_contact.withColumn('retweeted_user', when(isnull(df_contact.retweeted_status), None).otherwise(df_contact.retweeted_status["user"]))
+
+#extract retweeted_user_id from retweeted_user
+df_contact = df_contact.withColumn('retweeted_user_id', when(isnull(df_contact.retweeted_user), None).otherwise(df_contact.retweeted_user["id"]))
+
+#extract hashtag list
+df_contact = df_contact.withColumn("hashTagList", df_contact.entities["hashtags"])
+
+# explode out the hashtag list into individual hashtag
+df_contact_explode = df_contact.withColumn("explode_tag", explode("hashTagList"))
+
+# transform all tags to lower cases
+df_contact_hashtag_text = df_contact_explode.withColumn("tag_text", lower(df_contact_explode.explode_tag.text))
+
+df_contact_hash_string = df_contact_hashtag_text.groupby("id").agg(collect_list('tag_text').alias('tag_list')).withColumn("tags", concat_ws("#", col("tag_list")))
+
+df_content_tags = df_contact.join(df_contact_hash_string, 'id', 'left')[['user_id', 'in_reply_to_user_id', 'retweeted_user_id', 'text', "tags"]]
+
+df_content_tags = df_content_tags.withColumn("contact_user_id", when(isnull(df_content_tags.retweeted_user_id), df_content_tags.in_reply_to_user_id).otherwise(df_content_tags.retweeted_user_id))
+
+df_content_tags = df_content_tags.withColumn("is_reply", when(isnull(df_content_tags.retweeted_user_id), True).otherwise(False))
+
+df_content_tags = df_content_tags[['user_id', 'contact_user_id', 'is_reply', 'text', "tags"]]
+
+#find contact tweet involving only one user
+df_content_tags_self = df_content_tags.filter(df_content_tags.user_id == df_content_tags.contact_user_id)
+
+#find contact tweet involving two users
+df_content_tags_other = df_content_tags.filter(~(df_content_tags.user_id == df_content_tags.contact_user_id))
+
+df_content_tags_other_reverse = df_content_tags_other.rdd.toDF(["contact_user_id", "user_id", "is_reply", "text", "tags"])
+
+#for row A, B, make a row B, A, since we want to store score between A and B two times to speed up query, no need to do this for contact tweet involving only one user
+df_content_tags_other_all = df_content_tags_other.unionByName(df_content_tags_other_reverse)
+
+#glue contact user together
+df_content_tags_all = df_content_tags_other_all.unionByName(df_content_tags_self)
+
+dynamic_table = df_content_tags_all\
+                .withColumnRenamed("user_id", "sender")\
+                .withColumnRenamed("contact_user_id", "receiver")\
+                .withColumnRenamed("text", "content")\
+                [["is_reply", "content", "tags", "sender", "receiver"]]
+
+%livy2.pyspark
+#========================================================Export to CSV File========================================================================#
+import csv
+from StringIO import StringIO
+def csv_string_for_row(row):
+    sio = StringIO()
+    csv.writer(sio, quoting=csv.QUOTE_ALL).writerow([unicode(elem).encode('utf-8') for elem in row])
+    value = sio.getvalue()
+    sio.close()
+    return value
+dynamic_table.rdd.map(csv_string_for_row).saveAsTextFile('dynamic_table.csv')

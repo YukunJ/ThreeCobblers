@@ -1,0 +1,15 @@
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: pv0
+spec:
+  capacity:
+    storage: 120Gi
+  claimRef:
+    namespace: default
+    name: data-mysql-0
+  accessModes:
+    - ReadWriteOnce
+  awsElasticBlockStore:
+    volumeID: vol-0a0f3acb4cec93cd6
+    fsType: ext4

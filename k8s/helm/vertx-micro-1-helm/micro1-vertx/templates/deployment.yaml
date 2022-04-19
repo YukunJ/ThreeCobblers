@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertx-micro-service-one-deployment
+spec:
+  selector:
+    matchLabels:
+      micro-service-one-vertx:  v1
+  replicas: 48
+  template:
+    metadata:
+      labels:
+        micro-service-one-vertx:  v1
+    spec:
+      containers:
+        - name: micro-service-one-vertx
+          image: 971734603674.dkr.ecr.us-east-1.amazonaws.com/webtier/arm:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 250m
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: micro-service-one-spring-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vertx-micro-service-one-deployment
+  minReplicas: 48
+  maxReplicas: 56
+  targetCPUUtilizationPercentage: 80

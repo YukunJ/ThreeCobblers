@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vertx-micro-service-two-deployment
+spec:
+  selector:
+    matchLabels:
+      micro-service-two-vertx:  v1
+  replicas: 24
+  template:
+    metadata:
+      labels:
+        micro-service-two-vertx:  v1
+    spec:
+      containers:
+        - name: micro-service-two-vertx
+          image: 971734603674.dkr.ecr.us-east-1.amazonaws.com/ccproject/webtier:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 400m
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: micro-service-two-vertx-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vertx-micro-service-two-deployment
+  minReplicas: 24
+  maxReplicas: 28
+  targetCPUUtilizationPercentage: 80
