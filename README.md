@@ -52,9 +52,9 @@ In this project, developments are divided into three phases incrementally. The u
 
 ### Technology Stack
 
-**Programming Language**: Java, Python
+**Programming Language**: Java
 
-**Framework**: Vert.x, Spring Boot
+**Framework**: Vert.x
 
 **ETL**: Spark
 
