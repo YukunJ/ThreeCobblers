@@ -50,6 +50,17 @@ In this project, developments are divided into three phases incrementally. The u
 
 ---
 
+### Technology Stack
+
+   Programming Language: Java, Python
+   Framework: Vert.x, Spring Boot
+   ETL: Spark
+   Database: MySQL (InnoDB, MyISAM), Aurora
+   Orchestration: Docker, Kubernetes, kOps
+   Cloud: AWS (EC2, RDS, EKS), Azure (HDInsight)
+
+---
+
 ### File Structure
     /etl-spark # the ETL Spark Code script
     /k8s # the self-managed Kops and helm script used in phase2
