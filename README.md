@@ -62,7 +62,7 @@ In this project, developments are divided into three phases incrementally. The u
 
 **Orchestration**: Docker, Kubernetes, kOps, Helm
 
-**Cloud**: AWS (EC2, RDS, ECS, EKS, Managed Node Group), Azure (HDInsight)
+**Cloud**: AWS (EC2, RDS, ECS, EKS, Managed Node Group), Azure (HDInsight), Load Balancer (ALB, NLB)
 
 ---
 
