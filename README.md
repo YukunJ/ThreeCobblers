@@ -104,4 +104,6 @@ In Phase **2**, we ranked **2nd**.
 
 <img src="pic/phase2-ranking.png" alt="drawing" width="600"/>
 
-In Phase **3**, we believe we ranked **3rd**. The final rank is yet to be released soon.
+In Phase **3**, we ranked **exceptionally** well.
+
+<img src="pic/phase3-ranking.png" alt="drawing" width="600"/>
