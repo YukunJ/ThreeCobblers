@@ -1,11 +1,11 @@
 # ThreeCobblers - AWS Cloud Microservice
 
 ###### Init Time: Feb 22 2022
-###### Last Updated: Apr 27 2022
+###### Last Updated: Apr 30 2022
 
 ---
 
-Welcome to our [15619-Cloud Computing](https://www.cs.cmu.edu/~msakr/15619-s20/15319_15619_s20_Syllabus.pdf) final project repository!
+Welcome to our Carnegie Mellon [15619-Cloud Computing](https://www.cs.cmu.edu/~msakr/15619-s20/15319_15619_s20_Syllabus.pdf) final project repository!
 
 Our team is named "**ThreeCobblers**"
 
